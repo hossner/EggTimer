@@ -47,7 +47,7 @@ void loop(){
     for (byte i = 0; i < 5; i++){
       blinkIt(1, 500, PIN_LED_1);
       delay(500);
-      ModeL1 = 1;
+      ModeL1 = 3;
     }
     break;
   case(3):
@@ -57,7 +57,7 @@ void loop(){
     // If it takes more than 30 seconds, go to ModeL1 1
 
     /* Test code follows... */
-      blinkIt(3, 100, PIN_LED_1);
+    //  blinkIt(3, 100, PIN_LED_1);
 
     WDTstart();
     ModeL1 = 4;
@@ -71,6 +71,7 @@ void loop(){
       WDT_handled = true;
       if (tmp_nr > 3){
         WDTstop();
+        ModeL1 = 1;
       }
       blinkIt(3, 100, PIN_LED_1);
     }
@@ -181,6 +182,7 @@ ISR(WDT_vect){
   wdt_reset();
   WDT_handled = false;
 }
+
 
 // Hardware interrupt routine
 ISR(INT0_vect){
