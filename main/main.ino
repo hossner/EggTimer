@@ -12,17 +12,19 @@
 #define PIN_HX71_DT 13
 */
 #define PIN_BTN_1 2   // The INT0 pin used for HW interrupt, same as PIN 2 on Uno
-#define PIN_LED_1 13  // Atmega328 PCINT5?
+#define PIN_LED_1 13 // PORTB5 (not working ) //13  // Atmega328 PCINT5?
 
 // Global variables
 //TM1637Display display(PIN_TM1637_CLK, PIN_TM1637_DIO);
-byte ModeL1 = 0;
+volatile byte ModeL1 = 0;
 volatile bool WDT_handled = true;
 
 byte tmp_nr = 0;
 
 void setup(){
-  pinMode(PIN_BTN_1, INPUT);
+  WDTstop();
+  pinMode(PIN_BTN_1, INPUT_PULLUP);
+  //pinMode(PIN_BTN_1, INPUT);
   pinMode(PIN_LED_1, OUTPUT);
   #ifdef DEBUG
   Serial.begin(9600);
@@ -71,6 +73,7 @@ void loop(){
       WDT_handled = true;
       if (tmp_nr > 3){
         WDTstop();
+        tmp_nr = 0;
         ModeL1 = 1;
       }
       blinkIt(3, 100, PIN_LED_1);
@@ -183,8 +186,8 @@ ISR(WDT_vect){
   WDT_handled = false;
 }
 
-
 // Hardware interrupt routine
 ISR(INT0_vect){
-    EIMSK &= ~_BV(INT0);           // Disable the INT0 bit inte EIMSK register so only one interrupt is invoked
+  EIMSK &= ~_BV(INT0);           // Disable the INT0 bit inte EIMSK register so only one interrupt is invoked
+  digitalWrite(PIN_LED_1, HIGH);
 }
