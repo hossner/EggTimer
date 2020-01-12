@@ -6,13 +6,13 @@
 
 // === PINs ===
 /*
-#define PIN_TM1637_CLK 8
-#define PIN_TM1637_DIO 9
 #define PIN_HX71_SCK 12
 #define PIN_HX71_DT 13
 */
-#define PIN_BTN_1 2   // The INT0 pin used for HW interrupt, same as PIN 2 on Uno
-#define PIN_LED_1 13  // Atmega328 PCINT5?
+#define PIN_BTN_1 2       // Corresponds to pin INT0 on Atmega328P, used for HW interrupt
+#define PIN_LED_1 13      // Atmega328P physical pin 19
+#define PIN_TM1637_CLK 8  // Atmega328P physical pin 
+#define PIN_TM1637_DIO 9
 
 // Global variables
 //TM1637Display display(PIN_TM1637_CLK, PIN_TM1637_DIO);
