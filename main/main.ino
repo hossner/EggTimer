@@ -1,112 +1,181 @@
-// #include <TM1637Display.h>
 #include <avr/sleep.h>
 #include <avr/wdt.h>
+#include <TM1637Display.h>
 
 #define DEBUG 0
 
+// === Values ===
+#define SHUTDOWN_TIME 5 // Nr of seconds, after which it should automatically turn off
+#define MIN_EGG_WEIGHT 20 // The minimum weight to be recognized as an egg
+#define MAX_EGG_WEIGHT 90 // The maximum weight to be recognized as an egg
+#define DEFAULT_BRIGHTNESS 0x0f
+#define SCALE_SENSITIVITY 1 // The nr of grams the scale has to "stand still" before considered done
+
 // === PINs ===
 /*
-#define PIN_TM1637_CLK 8
-#define PIN_TM1637_DIO 9
-#define PIN_HX71_SCK 12
-#define PIN_HX71_DT 13
+  #define PIN_HX71_SCK 12
+  #define PIN_HX71_DT 13
 */
-#define PIN_BTN_1 2   // The INT0 pin used for HW interrupt, same as PIN 2 on Uno
-#define PIN_LED_1 13 // PORTB5 (not working ) //13  // Atmega328 PCINT5?
+#define PIN_BTN_1 2       // The INT0 pin used for HW interrupt, PIN 4 on Atmega328P
+#define PIN_LED_1 13      // PORTB5 (not working ) //13  // Atmega328 PCINT5?
+#define PIN_TM1637_CLK 8  // Yellow wire, PIN 14 on Atmega328P
+#define PIN_TM1637_DIO 9  // Green wire, PIN 15 on Atmega328P
 
 // Global variables
-//TM1637Display display(PIN_TM1637_CLK, PIN_TM1637_DIO);
+TM1637Display display(PIN_TM1637_CLK, PIN_TM1637_DIO);
 volatile byte ModeL1 = 0;
+byte OldModeL1 = 0;
 volatile bool WDT_handled = true;
+byte shutdown_timer = 0;
+float egg_weight = 0;
+float last_egg_weight = 0;
 
 byte tmp_nr = 0;
 
-void setup(){
-  WDTstop();
+void setup() {
+  StopWDT();
   pinMode(PIN_BTN_1, INPUT_PULLUP);
   //pinMode(PIN_BTN_1, INPUT);
   pinMode(PIN_LED_1, OUTPUT);
-  #ifdef DEBUG
+#ifdef DEBUG
   Serial.begin(9600);
-  #endif
+#endif
 }
 
-void loop(){
-  switch(ModeL1){
-  case 0:                 // Starting up, running tests...
-    ModeL1 = initTest();
-    break;
-  case(1):
-    // Everyting's fine, go to sleep
-    powerDown();
-    ModeL1 = 2;
-    break;
-  case(2):
-    // We were sleeping, user pressed button to wake us up
-    // Disable external (button) interrupt
-    // Start scale and monitor it for a stable reading that seems feseable (say 40 to 80 grams)
-    // If it takes more than 30 seconds, go to ModeL1 1
-    for (byte i = 0; i < 5; i++){
-      blinkIt(1, 500, PIN_LED_1);
-      delay(500);
-      ModeL1 = 3;
-    }
-    break;
-  case(3):
-    // We have a stable reading, calculate the time.
-    // If user pushes button, toggle between weight and time
-    // Monitor scale, if it goes down, move to next ModeL1
-    // If it takes more than 30 seconds, go to ModeL1 1
-
-    /* Test code follows... */
-    //  blinkIt(3, 100, PIN_LED_1);
-
-    WDTstart();
-    ModeL1 = 4;
-    /* --------- */
-    break;
-  case(4):
-    // Waiting for user to push button to start count down
-    // If it takes more than 30 seconds, go to ModeL1 1
-    if (!WDT_handled){
-      tmp_nr = tmp_nr+1;
-      WDT_handled = true;
-      if (tmp_nr > 3){
-        WDTstop();
-        tmp_nr = 0;
-        ModeL1 = 1;
+void loop() {
+  switch (ModeL1) {
+    case 0:                 // Starting up, running tests...
+      ModeL1 = initTest();
+      break;
+    case (1):
+      // Everyting's fine, go to sleep
+      display.clear();
+      powerDown();
+      OldModeL1 = 1;
+      ModeL1 = 2;
+      break;
+    case (2):
+      // We were sleeping, user pressed button to wake us up, external (button) interrupt is disabled
+      // Start scale and monitor it for a stable reading that seems feseable (say 40 to 80 grams)
+      // If it takes more than SHUTDOWN_TIME seconds, go to ModeL1 1
+      if (OldModeL1 != 2){
+        BlinkIt(1, 100, PIN_LED_1);
+        OldModeL1 = 2;
+        StartScale();
+        StartWDT();
+        last_egg_weight = 0;
+        // Beep(1, 100);
+        StartDisplay(0,0);
       }
-      blinkIt(3, 100, PIN_LED_1);
-    }
-    break;
-  case(5):
-    // Counting down...
-    // If user presses button, go to ModeL1 7
-    // If counter reaches 0, go to ModeL1 6
-    break;
-  case(6):
-    // Counter is finished, start beeping
-    // When beeping is done, go to ModeL1 1
-    break;
-  case(7):
-    // User pressed button during count down
-    // Stop count down and blink the display
-    // After 30 seconds, go to ModeL1 1
-    break;
-  default:
-    // Some error mode...
-    break;
+      if (!WDT_handled) {
+        WDT_handled = true;
+        shutdown_timer++;
+        //BlinkIt(shutdown_timer, 100, PIN_LED_1);
+        if (shutdown_timer >= SHUTDOWN_TIME) {
+          StopWDT();
+          StopScale();
+          StopDisplay();
+          shutdown_timer = 0;
+          ModeL1 = 1; // Go to sleep
+          break;
+        }
+      }
+      egg_weight = ScaleReading();
+      if ((egg_weight > MIN_EGG_WEIGHT) && (egg_weight < MAX_EGG_WEIGHT)){
+        if (abs(egg_weight - last_egg_weight) > SCALE_SENSITIVITY){ // The scale is still moving
+          shutdown_timer = 0;
+        } else { // Should we have more than one consecutive stable reading before proceeding?
+          StopWDT();
+          StopScale();
+          ModeL1 = 3;
+          // break; // Maybe...
+        }
+        last_egg_weight = egg_weight;
+      }
+      break;
+    case (3):
+      // We have a stable reading, calculate the time.
+      // If user pushes button, toggle between weight and time
+      // Monitor scale, if it goes down, move to next ModeL1
+      // If it takes more than 30 seconds, go to ModeL1 1
+
+      /* Test code follows... */
+      //  blinkIt(3, 100, PIN_LED_1);
+
+      StartWDT();
+      ModeL1 = 4;
+      /* --------- */
+      break;
+    case (4):
+      // Waiting for user to push button to start count down
+      // If it takes more than 30 seconds, go to ModeL1 1
+      if (!WDT_handled) {
+        tmp_nr = tmp_nr + 1;
+        WDT_handled = true;
+        if (tmp_nr > 3) {
+          StopWDT();
+          tmp_nr = 0;
+          ModeL1 = 1;
+          int k;
+          display.setBrightness(0x0f);
+          for (k = 0; k <= 4; k++) {
+            display.showNumberDecEx(1234, (0x80 >> 1), true);
+            delay(2000);
+          }
+        }
+        BlinkIt(3, 100, PIN_LED_1);
+      }
+      break;
+    case (5):
+      // Counting down...
+      // If user presses button, go to ModeL1 7
+      // If counter reaches 0, go to ModeL1 6
+      break;
+    case (6):
+      // Counter is finished, start beeping
+      // When beeping is done, go to ModeL1 1
+      break;
+    case (7):
+      // User pressed button during count down
+      // Stop count down and blink the display
+      // After 30 seconds, go to ModeL1 1
+      break;
+    default:
+      // Some error mode...
+      break;
   }
 }
 
-byte initTest(){
+void StartDisplay(byte nr1, byte nr2){
+  display.setBrightness(DEFAULT_BRIGHTNESS);
+  display.showNumberDecEx(int(nr1*100+nr2), (0x80 >> 1), true);
+}
+
+float StopDisplay(){
+  display.clear();
+}
+
+
+float ScaleReading(){
+  return 0.0;
+}
+
+void StartScale(){
+  // Power up the scale...
+}
+
+void StopScale(){
+  // Power down the scale...
+}
+
+byte initTest() {
   // Test if battery is OK
   // Test if there is weight on the scale
-  blinkIt(5, 100, PIN_LED_1);
+  BlinkIt(5, 100, PIN_LED_1);
   return 1; // Go to ModeL1 1...
 }
 
-void powerDown(){
+void powerDown() {
   byte adcsra, mcucr1, mcucr2;
   sleep_enable();
   set_sleep_mode(SLEEP_MODE_PWR_DOWN);
@@ -125,10 +194,10 @@ void powerDown(){
   //digitalWrite(PIN_LED_1, HIGH);
 }
 
-void watchdogSetup(){
+void watchdogSetup() {
   cli();  // disable all interrupts
   wdt_reset(); // reset the WDT timer
-  MCUSR &= ~(1<<WDRF);  // because the data sheet said to
+  MCUSR &= ~(1 << WDRF); // because the data sheet said to
   /*
     WDTCSR configuration:
     WDIE = 1 :Interrupt Enable
@@ -139,22 +208,22 @@ void watchdogSetup(){
     WDP0 = 0 :timeout period.
   */
   // Enter Watchdog Configuration mode:
-  WDTCSR = (1<<WDCE) | (1<<WDE);
+  WDTCSR = (1 << WDCE) | (1 << WDE);
   // Set Watchdog settings: interrupte enable, 0110 for timer
-  WDTCSR = (1<<WDIE) | (0<<WDP3) | (1<<WDP2) | (1<<WDP1) | (0<<WDP0);
+  WDTCSR = (1 << WDIE) | (0 << WDP3) | (1 << WDP2) | (1 << WDP1) | (0 << WDP0);
   sei();
 }
 
-void WDTstop(){
+void StopWDT() {
   wdt_reset();                     // Just precaution...
   cli();                           // Disable interrupts while changing the registers
   MCUSR = 0;                       // Reset status register flags
   WDTCSR |= 0b00011000;            // Set WDCE and WDE to enter config mode
   WDTCSR =  0b00000000;            // set WDIE (interrupt disabled)
-  sei();                           // re-enable interrupts 
+  sei();                           // re-enable interrupts
 }
 
-void WDTstart(){
+void StartWDT() {
   cli();                           // Disable interrupts while changing the registers
   MCUSR = 0;                       // Reset status register flags
   WDTCSR |= 0b00011000;            // Set WDCE and WDE to enter config mode, or do "WDTCSR = (1<<WDCE) | (1<<WDE);"
@@ -168,9 +237,9 @@ void WDTstart(){
   //  8 seconds: 0b100001
 }
 
-void blinkIt(byte times, unsigned int delayTime, byte pin){
+void BlinkIt(byte times, unsigned int delayTime, byte pin) {
   if (times == 0) return;
-  for (byte t = 1; t <= times; t++){
+  for (byte t = 1; t <= times; t++) {
     digitalWrite(pin, HIGH);
     delay(delayTime);
     digitalWrite(pin, LOW);
@@ -179,7 +248,7 @@ void blinkIt(byte times, unsigned int delayTime, byte pin){
 }
 
 // Watchdog interrupt routine
-ISR(WDT_vect){
+ISR(WDT_vect) {
   // not hanging, just waiting
   // reset the watchdog
   wdt_reset();
@@ -187,7 +256,6 @@ ISR(WDT_vect){
 }
 
 // Hardware interrupt routine
-ISR(INT0_vect){
+ISR(INT0_vect) {
   EIMSK &= ~_BV(INT0);           // Disable the INT0 bit inte EIMSK register so only one interrupt is invoked
-  digitalWrite(PIN_LED_1, HIGH);
 }
