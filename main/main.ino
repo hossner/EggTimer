@@ -5,35 +5,40 @@
 #define DEBUG 0
 
 // === Values ===
-#define SHUTDOWN_TIME 5 // Nr of seconds, after which it should automatically turn off
-#define SETUP_SHUTDOWN_TIME 5 // Nr of seconds during setup after which it should move between params
-#define MIN_EGG_WEIGHT 20 // The minimum weight to be recognized as an egg
-#define MAX_EGG_WEIGHT 90 // The maximum weight to be recognized as an egg
-#define DEFAULT_BRIGHTNESS 0x0f
-#define SCALE_SENSITIVITY 1 // The nr of grams the scale has to "stand still" before considered done
+#define SHUTDOWN_TIME        5 // Nr of seconds, after which it should automatically turn off
+#define SETUP_SHUTDOWN_TIME  5 // Nr of seconds during setup after which it should move between params
+#define MIN_EGG_WEIGHT      20 // The minimum weight to be recognized as an egg
+#define MAX_EGG_WEIGHT      90 // The maximum weight to be recognized as an egg
+#define DEFAULT_BRIGHTNESS  0x0f
+#define SCALE_SENSITIVITY    1 // The nr of grams the scale has to "stand still" before considered done
+#define BATTERY_LOW         3.8
+#define BATTERY_CRITICAL    3.7
 
 // === PINs ===
 /*
-  #define PIN_HX71_SCK 12
-  #define PIN_HX71_DT 13
+#define PIN_HX71_SCK    12
+#define PIN_HX71_DT     13
 */
-#define PIN_BTN_1 2       // The INT0 pin used for HW interrupt, PIN 4 on Atmega328P
-#define PIN_LED_1 13      // PORTB5 (not working ) //13  // Atmega328 PCINT5?
-#define PIN_TM1637_CLK 8  // Yellow wire, PIN 14 on Atmega328P
-#define PIN_TM1637_DIO 9  // Green wire, PIN 15 on Atmega328P
+#define PIN_BTN_1        2       // The INT0 pin used for HW interrupt, PIN 4 on Atmega328P
+#define PIN_LED_1       13      // PORTB5 (not working ) //13  // Atmega328 PCINT5?
+#define PIN_TM1637_CLK   8  // Yellow wire, PIN 14 on Atmega328P
+#define PIN_TM1637_DIO   9  // Green wire, PIN 15 on Atmega328P
 
 // Global variables
 TM1637Display display(PIN_TM1637_CLK, PIN_TM1637_DIO);
-volatile byte ModeL1 = 0;
-byte OldModeL1 = 0;
-volatile bool WDT_handled = true;
-byte shutdown_timer = 0;
-float egg_weight = 0;
-float last_egg_weight = 0;
-unsigned int egg_boiling_time = 0;
-byte param1 = 225; // Min 200, max 250
-byte param2 = 34;  // Min 25, max 40
-byte param3 = 15;  // Min 0, max 240
+volatile byte ModeL1                  = 0;
+byte          OldModeL1               = 0;
+volatile bool WDT_handled             = true;
+//volatile bool button_pressed          = false;
+byte          shutdown_timer          = 0;
+float         egg_weight              = 0;
+float         last_egg_weight         = 0;
+unsigned int  egg_boiling_time        = 0;
+byte          param1                  = 225; // Min 200, max 250
+byte          param2                  = 34;  // Min 25, max 40
+byte          param3                  = 15;  // Min 0, max 240
+bool          battery_warning_issued  = false;
+bool          battery_critically_low  = false;
 
 byte tmp_nr = 0;
 
@@ -46,12 +51,14 @@ void setup() {
 
 void loop() {
   switch (ModeL1) {
-    case 0:                 // Starting up, running tests...
+    case 0:
+      // Starting up, running tests...
       ModeL1 = initTest();
       break;
     case (1):
       // Everyting's fine, go to sleep
       // display.clear();
+      battery_warning_issued = false;
       powerDown();
       OldModeL1 = 1;
       ModeL1 = 2;
@@ -65,6 +72,10 @@ void loop() {
           BlinkIt(1, 100, PIN_LED_1);
         #endif
         OldModeL1 = 2;
+        if ((!battery_warning_issued) && (!BatteryOK())){
+          ModeL1 = 20;
+          break;
+        }
         last_egg_weight = 0;
         shutdown_timer = 0;
         StartScale();
@@ -107,6 +118,7 @@ void loop() {
       //  blinkIt(3, 100, PIN_LED_1);
       if (OldModeL1 != 3){
         OldModeL1 = 3;
+        shutdown_timer = 0;
       }
       StartWDT();
       ModeL1 = 4;
@@ -147,13 +159,22 @@ void loop() {
     case (7):
       // User pressed button during count down
       // Stop count down and blink the display
-      // After 30 seconds, go to ModeL1 1
+      // After 30 seconds or user presses button, go to ModeL1 1
       break;
-          case (50): // Setup mode
+    case (20): // Battery low mode
+      if (OldModeL1 != 20){
+        OldModeL1 = 20;
+        battery_warning_issued = true;
+      }
+      // Here we should blink "BAtt" on display and beeping
+      // When doen, if batt_critically_low, then ModeL1 = 1 (go to sleep), else ModeL1 = 2
+      ModeL1 = 2;
+      break;
+    case (50): // Setup mode
       // User pressed button during boot...
       if (OldModeL1 != 50){
         OldModeL1 = 50;
-        setup_param = param1;
+        static byte setup_param = param1;
         shutdown_timer = 0;
         StartWDT(); // Should be with param for 4 sec watchdog
       }
@@ -176,6 +197,15 @@ void loop() {
       // Some error mode...
       break;
   }
+}
+
+bool BatteryOK(){
+  // Measure voltage.
+  // Level BATTERY_LOW; battery_critically_low = false, return true.
+  // Level < BATTERY_LOW and > BATTERY_CRITICAL; battery_critically_low = false, return false.
+  // Level < BATTERY_LOW and < BATTERY_CRITICAL; battery_critically_low = true, return false.
+  battery_critically_low = false;
+  return true;
 }
 
 void StartDisplay(byte nr1, byte nr2){
@@ -205,7 +235,7 @@ byte initTest() {
   // Test if there is weight on the scale
   #ifdef DEBUG
   BlinkIt(5, 100, PIN_LED_1);
-    #endif
+  #endif
   if (digitalRead(PIN_BTN_1) == HIGH){ // User holding button during boot
     return 50;                         // Enter setup mode
   }
@@ -295,4 +325,5 @@ ISR(WDT_vect) {
 // Hardware interrupt routine
 ISR(INT0_vect) {
   EIMSK &= ~_BV(INT0);           // Disable the INT0 bit inte EIMSK register so only one interrupt is invoked
+  // button_pressed = true;      // Maybe...
 }
