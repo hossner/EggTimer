@@ -6,6 +6,7 @@
 
 // === Values ===
 #define SHUTDOWN_TIME 5 // Nr of seconds, after which it should automatically turn off
+#define SETUP_SHUTDOWN_TIME 5 // Nr of seconds during setup after which it should move between params
 #define MIN_EGG_WEIGHT 20 // The minimum weight to be recognized as an egg
 #define MAX_EGG_WEIGHT 90 // The maximum weight to be recognized as an egg
 #define DEFAULT_BRIGHTNESS 0x0f
@@ -29,6 +30,10 @@ volatile bool WDT_handled = true;
 byte shutdown_timer = 0;
 float egg_weight = 0;
 float last_egg_weight = 0;
+unsigned int egg_boiling_time = 0;
+byte param1 = 225; // Min 200, max 250
+byte param2 = 34;  // Min 25, max 40
+byte param3 = 15;  // Min 0, max 240
 
 byte tmp_nr = 0;
 
@@ -37,9 +42,6 @@ void setup() {
   pinMode(PIN_BTN_1, INPUT_PULLUP);
   //pinMode(PIN_BTN_1, INPUT);
   pinMode(PIN_LED_1, OUTPUT);
-#ifdef DEBUG
-  Serial.begin(9600);
-#endif
 }
 
 void loop() {
@@ -49,7 +51,7 @@ void loop() {
       break;
     case (1):
       // Everyting's fine, go to sleep
-      display.clear();
+      // display.clear();
       powerDown();
       OldModeL1 = 1;
       ModeL1 = 2;
@@ -59,18 +61,20 @@ void loop() {
       // Start scale and monitor it for a stable reading that seems feseable (say 40 to 80 grams)
       // If it takes more than SHUTDOWN_TIME seconds, go to ModeL1 1
       if (OldModeL1 != 2){
-        BlinkIt(1, 100, PIN_LED_1);
+        #ifdef DEBUG
+          BlinkIt(1, 100, PIN_LED_1);
+        #endif
         OldModeL1 = 2;
+        last_egg_weight = 0;
+        shutdown_timer = 0;
         StartScale();
         StartWDT();
-        last_egg_weight = 0;
-        // Beep(1, 100);
         StartDisplay(0,0);
+        // Beep(1, 100);
       }
       if (!WDT_handled) {
         WDT_handled = true;
         shutdown_timer++;
-        //BlinkIt(shutdown_timer, 100, PIN_LED_1);
         if (shutdown_timer >= SHUTDOWN_TIME) {
           StopWDT();
           StopScale();
@@ -101,7 +105,9 @@ void loop() {
 
       /* Test code follows... */
       //  blinkIt(3, 100, PIN_LED_1);
-
+      if (OldModeL1 != 3){
+        OldModeL1 = 3;
+      }
       StartWDT();
       ModeL1 = 4;
       /* --------- */
@@ -109,6 +115,9 @@ void loop() {
     case (4):
       // Waiting for user to push button to start count down
       // If it takes more than 30 seconds, go to ModeL1 1
+      if (OldModeL1 != 4){
+        OldModeL1 = 4;
+      }
       if (!WDT_handled) {
         tmp_nr = tmp_nr + 1;
         WDT_handled = true;
@@ -139,6 +148,29 @@ void loop() {
       // User pressed button during count down
       // Stop count down and blink the display
       // After 30 seconds, go to ModeL1 1
+      break;
+          case (50): // Setup mode
+      // User pressed button during boot...
+      if (OldModeL1 != 50){
+        OldModeL1 = 50;
+        setup_param = param1;
+        shutdown_timer = 0;
+        StartWDT(); // Should be with param for 4 sec watchdog
+      }
+      if (!WDT_handled) { // Timer triggered
+        WDT_handled = true;
+        shutdown_timer++;
+        if (shutdown_timer >= SETUP_SHUTDOWN_TIME) {
+          StopWDT();
+          StopScale();
+          StopDisplay();
+          shutdown_timer = 0;
+          ModeL1 = 1; // Go to sleep
+          break;
+        }
+      }
+      // Use a single param, set to param1, 2 and 3 consecutively
+      // Listen for button press to cycle through values
       break;
     default:
       // Some error mode...
@@ -171,7 +203,12 @@ void StopScale(){
 byte initTest() {
   // Test if battery is OK
   // Test if there is weight on the scale
+  #ifdef DEBUG
   BlinkIt(5, 100, PIN_LED_1);
+    #endif
+  if (digitalRead(PIN_BTN_1) == HIGH){ // User holding button during boot
+    return 50;                         // Enter setup mode
+  }
   return 1; // Go to ModeL1 1...
 }
 
