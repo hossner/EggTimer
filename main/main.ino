@@ -45,6 +45,7 @@ volatile bool WDT_handled             = true;
 byte          shutdown_timer          = 0;
 float         egg_weight              = 0;
 float         last_egg_weight         = 0;
+float         last_display_egg_weight = 0;
 unsigned int  egg_boiling_time        = 0;
 byte          param1                  = 225; // Min 200, max 250
 byte          param2                  = 34;  // Min 25, max 40
@@ -63,8 +64,6 @@ void setup() {
   //pinMode(PIN_BTN_1, INPUT);
   pinMode(PIN_LED_1, OUTPUT);
   scale.begin(PIN_HX71_DT, PIN_HX71_SCK);
-  scale.set_scale(SCALE_CALIBRATION);
-  scale.tare();
 }
 
 void loop() {
@@ -86,9 +85,6 @@ void loop() {
       // Start scale and monitor it for a stable reading that seems feseable (say 40 to 80 grams)
       // If it takes more than SHUTDOWN_TIME seconds, go to ModeL1 1
       if (OldModeL1 != 2){
-        #ifdef DEBUG
-          BlinkIt(1, 100, PIN_LED_1);
-        #endif
         OldModeL1 = 2;
         if ((!battery_warning_issued) && (!BatteryOK())){
           ModeL1 = 20;
@@ -114,18 +110,21 @@ void loop() {
         }
       }
       egg_weight = ScaleReading();
-      #ifdef DEBUG
-      Serial.println(egg_weight);
-      #endif
-      DisplayShow(egg_weight*10);
-      if ((egg_weight > MIN_EGG_WEIGHT) && (egg_weight < MAX_EGG_WEIGHT)){
+      if (egg_weight < 0){ // Scale not ready
+        break;
+      }
+      if (egg_weight != last_display_egg_weight){ 
+        DisplayShow(egg_weight*10);
+        last_display_egg_weight = egg_weight;
+      }
+      if ((egg_weight > MIN_EGG_WEIGHT) && (egg_weight < MAX_EGG_WEIGHT)){ // Valid egg weight...
         if (abs(egg_weight - last_egg_weight) > SCALE_SENSITIVITY){ // The scale is still moving
           shutdown_timer = 0;
         } else { // Should we have more than one consecutive stable reading before proceeding?
           StopWDT();
           StopScale();
+          Beep(1, 20); // Make a bep...
           ModeL1 = 3;
-          // break; // Maybe...
         }
         last_egg_weight = egg_weight;
       }
@@ -288,6 +287,8 @@ float ScaleReading(){
 
 void StartScale(){
   // Power up the scale...
+  scale.set_scale(SCALE_CALIBRATION);
+  scale.tare();
 }
 
 void StopScale(){
