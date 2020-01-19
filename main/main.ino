@@ -1,8 +1,9 @@
 #include <avr/sleep.h>
 #include <avr/wdt.h>
-#include <TM1637Display.h>
+#include <TM1637Display.h>  // https://github.com/avishorp/TM1637
+#include <HX711.h>          // https://github.com/bogde/HX711
 
-#define DEBUG 0
+#define DEBUG 1
 
 // === Values ===
 #define SHUTDOWN_TIME        5 // Nr of seconds, after which it should automatically turn off
@@ -13,19 +14,30 @@
 #define SCALE_SENSITIVITY    1 // The nr of grams the scale has to "stand still" before considered done
 #define BATTERY_LOW         3.8
 #define BATTERY_CRITICAL    3.7
+#define SCALE_CALIBRATION   5850  // The calibration value of the scale - needs to be calibrated!
 
 // === PINs ===
 /*
-#define PIN_HX71_SCK    12
-#define PIN_HX71_DT     13
+
 */
 #define PIN_BTN_1        2       // The INT0 pin used for HW interrupt, PIN 4 on Atmega328P
 #define PIN_LED_1       13      // PORTB5 (not working ) //13  // Atmega328 PCINT5?
 #define PIN_TM1637_CLK   8  // Yellow wire, PIN 14 on Atmega328P
 #define PIN_TM1637_DIO   9  // Green wire, PIN 15 on Atmega328P
+#define PIN_HX71_SCK    5     // 11 on Atmega329P
+#define PIN_HX71_DT     6     // 12 on Atmega329P
+
+
+const uint8_t SEG_ERR[] = {
+  SEG_A | SEG_D | SEG_E | SEG_F | SEG_G,           // E
+  SEG_E | SEG_G,                                   // r
+  SEG_E | SEG_G                                    // r
+};
+
 
 // Global variables
 TM1637Display display(PIN_TM1637_CLK, PIN_TM1637_DIO);
+HX711 scale;
 volatile byte ModeL1                  = 0;
 byte          OldModeL1               = 0;
 volatile bool WDT_handled             = true;
@@ -43,10 +55,16 @@ bool          battery_critically_low  = false;
 byte tmp_nr = 0;
 
 void setup() {
+  #ifdef DEBUG
+  Serial.begin(9600);
+  #endif
   StopWDT();
   pinMode(PIN_BTN_1, INPUT_PULLUP);
   //pinMode(PIN_BTN_1, INPUT);
   pinMode(PIN_LED_1, OUTPUT);
+  scale.begin(PIN_HX71_DT, PIN_HX71_SCK);
+  scale.set_scale(SCALE_CALIBRATION);
+  scale.tare();
 }
 
 void loop() {
@@ -96,6 +114,10 @@ void loop() {
         }
       }
       egg_weight = ScaleReading();
+      #ifdef DEBUG
+      Serial.println(egg_weight);
+      #endif
+      DisplayShow(egg_weight*10);
       if ((egg_weight > MIN_EGG_WEIGHT) && (egg_weight < MAX_EGG_WEIGHT)){
         if (abs(egg_weight - last_egg_weight) > SCALE_SENSITIVITY){ // The scale is still moving
           shutdown_timer = 0;
@@ -138,7 +160,7 @@ void loop() {
           tmp_nr = 0;
           ModeL1 = 1;
           int k;
-          display.setBrightness(0x0f);
+          //display.setBrightness(0x0f);
           for (k = 0; k <= 4; k++) {
             display.showNumberDecEx(1234, (0x80 >> 1), true);
             delay(2000);
@@ -208,9 +230,23 @@ bool BatteryOK(){
   return true;
 }
 
+void DisplayShow(int nr){
+  #ifdef DEBUG
+  Serial.print("In DisplayShow:\t");
+  Serial.println(nr);
+  #endif
+  if ((nr > 999) || (nr < 0)){
+    display.setSegments(SEG_ERR);
+    return;
+  }
+  // Show 47.1
+  display.showNumberDecEx(nr, 32, false);
+  //display.setSegments(SEG_ERR);//display.showNumberDec(nr, 32, false);
+}
+
 void StartDisplay(byte nr1, byte nr2){
   display.setBrightness(DEFAULT_BRIGHTNESS);
-  display.showNumberDecEx(int(nr1*100+nr2), (0x80 >> 1), true);
+  //display.showNumberDecEx(int(nr1*100+nr2), (0x80 >> 1), true);
 }
 
 float StopDisplay(){
@@ -219,7 +255,35 @@ float StopDisplay(){
 
 
 float ScaleReading(){
-  return 0.0;
+  #ifdef DEBUG
+  Serial.println("In ScaleReading");
+  #endif
+  float weight;
+  if (scale.is_ready()) {
+    #ifdef DEBUG
+    Serial.println("Scale is ready!");
+    #endif
+    weight = scale.get_units(10);
+  } else {
+    #ifdef DEBUG
+    Serial.println("Scale not ready");
+    #endif
+  }
+
+  #ifdef DEBUG
+  Serial.print("Scale reading:\t");
+  Serial.println(weight);
+  #endif
+  return weight;
+/*
+  if (scale.is_ready()) {
+    float weight = scale.get_units(10);
+    if ((weight < 0.5) && (weight > -0.5)){
+      return 0;
+    }
+  }
+  return 0;
+*/
 }
 
 void StartScale(){
