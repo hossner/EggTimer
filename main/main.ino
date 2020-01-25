@@ -6,20 +6,17 @@
 #define DEBUG 1
 
 // === Values ===
-#define SHUTDOWN_TIME       10 // Nr of seconds, after which it should automatically turn off
-#define SETUP_SHUTDOWN_TIME  5 // Nr of seconds during setup after which it should move between params
-#define MIN_EGG_WEIGHT      200 // The minimum weight to be recognized as an egg
-#define MAX_EGG_WEIGHT      900 // The maximum weight to be recognized as an egg
-#define DEFAULT_BRIGHTNESS  0x0f // Brightness of LCD screen
-#define SCALE_SENSITIVITY    10 // The nr of grams the scale has to "stand still" before considered done
-#define BATTERY_LOW         3.8 // Voltage below which battery is considered low but scale still functions
-#define BATTERY_CRITICAL    3.7 // Voltage below which battery is considered critically low and the scale won't function
-#define SCALE_CALIBRATION   5850  // The calibration value of the scale - needs to be calibrated!
+#define SHUTDOWN_TIME       10          // Nr of seconds, after which it should automatically turn off
+#define SETUP_SHUTDOWN_TIME  5          // Nr of seconds during setup after which it should move between params
+#define MIN_EGG_WEIGHT      200         // The minimum weight to be recognized as an egg
+#define MAX_EGG_WEIGHT      900         // The maximum weight to be recognized as an egg
+#define DEFAULT_BRIGHTNESS  0x0f        // Brightness of LCD screen
+#define SCALE_SENSITIVITY   10.0        // The nr of grams (times 10) the scale has to "stand still" before considered done
+#define BATTERY_LOW         3.8         // Voltage below which battery is considered low but scale still functions
+#define BATTERY_CRITICAL    3.7         // Voltage below which battery is considered critically low and the scale won't function
+#define SCALE_CALIBRATION   5850        // The calibration value of the scale - needs to be calibrated!
 
 // === PINs ===
-/*
-
-*/
 #define PIN_BTN_1        2       // The INT0 pin used for HW interrupt, PIN 4 on Atmega328P
 #define PIN_LED_1       13      // PORTB5 (not working ) //13  // Atmega328 PCINT5?
 #define PIN_TM1637_CLK   8  // Yellow wire, PIN 14 on Atmega328P
@@ -27,6 +24,12 @@
 #define PIN_HX71_SCK     5     // 11 on Atmega329P
 #define PIN_HX71_DT      6     // 12 on Atmega329P
 
+const uint8_t SEG_BATT[] = {
+  SEG_C | SEG_D | SEG_E | SEG_F | SEG_G,           // b
+  SEG_A | SEG_B | SEG_C | SEG_E | SEG_F | SEG_G,   // A
+  SEG_D | SEG_E | SEG_F | SEG_G,                   // t
+  SEG_D | SEG_E | SEG_F | SEG_G                    // t
+};
 
 const uint8_t SEG_ERR[] = {
   SEG_A | SEG_D | SEG_E | SEG_F | SEG_G,           // E
@@ -58,9 +61,9 @@ const uint8_t SEG_DONE[] = {
 
 // Global variables
 TM1637Display display(PIN_TM1637_CLK, PIN_TM1637_DIO);
-HX711 scale;
-volatile byte modeL1                  = 0;
-byte          OldModeL1               = 0;
+HX711         scale;
+volatile byte mode                    = 0;
+byte          last_mode               = 0;
 volatile bool WDT_handled             = true;
 volatile bool button_handled          = true;
 volatile bool button_enabled          = false;
@@ -68,17 +71,13 @@ byte          shutdown_timer          = 0;
 bool          show_as_weight          = true;
 float         egg_weight              = 0;
 float         last_egg_weight         = 0;
-float         last_display_egg_weight = 0;
 unsigned int  time_left               = 0;
 bool          timer_running           = false;
 bool          display_blank           = false;
-byte          param1                  = 225; // Min 200, max 250
-byte          param2                  = 34;  // Min 25, max 40
-byte          param3                  = 15;  // Min 0, max 240
-bool          battery_warning_issued  = false;
+byte          params[3]               = {225, 34, 15};    // (200 - 250), (25 - 40), (0 - 240)
+byte          paramsMin[3]            = {200, 25, 0};
+byte          paramsMax[3]            = {250, 40, 240};
 bool          battery_critically_low  = false;
-
-byte tmp_nr = 0;
 
 void setup() {
   #ifdef DEBUG
@@ -86,7 +85,6 @@ void setup() {
   #endif
   StopWDT();
   pinMode(PIN_BTN_1, INPUT_PULLUP);
-  //pinMode(PIN_BTN_1, INPUT);
   pinMode(PIN_LED_1, OUTPUT);
   scale.begin(PIN_HX71_DT, PIN_HX71_SCK);
 }
@@ -94,40 +92,28 @@ void setup() {
 // === State handling loop ===
 
 void loop() {
-  switch (modeL1) {
-    case 0:
-  #ifdef DEBUG
-  Serial.println("In mode 0");
-  #endif
-      // Starting up, running tests...
-      modeL1 = initTest();
+  switch (mode) {
+
+    case 0:                             // Boot mode, initializing & test
+      mode = InitTest();
+      GetParams();
       break;
-    case (1):
-  #ifdef DEBUG
-  Serial.println("In mode 1");
-  #endif
-      // Everyting's fine, go to sleep
-      // display.clear();
-      battery_warning_issued = false;
+
+    case (1):                           // Sleep mode
       battery_critically_low = false;
-      powerDown();
+      last_mode = 1;
+      PowerDown();                      // Sleeping here...
       button_handled = true;
-      OldModeL1 = 1;
-      modeL1 = 2;
+      if (BatteryOK()){             // Either sleep or continue
+        mode = 2;
+      } else {
+        mode = 20;
+      }
       break;
-    case (2):
-      // We were sleeping, user pressed button to wake us up, external (button) interrupt is disabled
-      // Start scale and monitor it for a stable reading that seems reasonable (say 40 to 80 grams)
-      // If it takes more than SHUTDOWN_TIME seconds, go to modeL1 1
-      if (OldModeL1 != 2){
-  #ifdef DEBUG
-  Serial.println("In mode 2");
-  #endif
-        OldModeL1 = 2;
-        if ((!battery_warning_issued) && (!BatteryOK())){
-          modeL1 = 20;
-          break;
-        }
+
+    case (2):                           // Weighing the egg...
+      if (last_mode != 2){
+        last_mode = 2;
         last_egg_weight = 0;
         shutdown_timer = 0;
         StartScale();
@@ -144,44 +130,33 @@ void loop() {
           StopScale();
           StopDisplay();
           shutdown_timer = 0;
-          modeL1 = 1; // Go to sleep
+          mode = 1;                     // Go to sleep
           break;
         }
       }
-      if (!ScaleReading()){  // Scale not ready
+      if (!ScaleReading()){             // Scale not ready
         break;
       }
-      if (egg_weight != last_display_egg_weight){ 
-  #ifdef DEBUG
-  Serial.print("\tegg_weight:\t");
-  Serial.println(egg_weight);
-  Serial.print("\tlast_display_egg_weight:\t");
-  Serial.println(last_display_egg_weight);
-  #endif
-        DisplayShow(egg_weight, true); /// Show as weight
-        last_display_egg_weight = egg_weight;
+      if (egg_weight != last_egg_weight){ 
+        DisplayShow(egg_weight, true);
       }
-      if ((egg_weight > MIN_EGG_WEIGHT) && (egg_weight < MAX_EGG_WEIGHT)){ // Valid egg weight...
-        if (abs(egg_weight - last_egg_weight) > SCALE_SENSITIVITY){ // The scale is still moving
+      if ((egg_weight > MIN_EGG_WEIGHT) && (egg_weight < MAX_EGG_WEIGHT)){
+        if (abs(egg_weight - last_egg_weight) > SCALE_SENSITIVITY){             // The scale is still moving
           shutdown_timer = 0;
-        } else { // Should we have more than one consecutive stable reading before proceeding?
+        } else {
           StopWDT();
           StopScale();
-          Beep(2, 1); // Make two short beeps...
-          modeL1 = 3;
+          Beep(2, 1);
+          mode = 3;
+          break;
         }
         last_egg_weight = egg_weight;
       }
       break;
-    case (3):
-      // We have a stable reading, calculate the time.
-      // Toggle between showing weight and time
-      // When user presses button, start countdown
-      if (OldModeL1 != 3){
-  #ifdef DEBUG
-  Serial.println("In mode 3");
-  #endif
-        OldModeL1 = 3;
+
+    case (3):                           // Waiting for user to push button, toggle weight and time
+      if (last_mode != 3){
+        last_mode = 3;
         shutdown_timer = 0;
         time_left = EggWeightToTime();
         DisplayShow(time_left, false);
@@ -194,173 +169,156 @@ void loop() {
         if (shutdown_timer >= (SHUTDOWN_TIME*2)) {
           StopWDT();
           StopDisplay();
-          modeL1 = 1; // Go to sleep
+          mode = 1;
           break;
         }
+        show_as_weight = !show_as_weight;
         if (show_as_weight){
           DisplayShow(egg_weight, true);
-          show_as_weight = false;
         } else {
           DisplayShow(time_left, false);
-          show_as_weight = true;
         }
       }
-      if (!button_handled){
+      if (!button_handled){             // User pushed button to start count-down
         button_handled = true;
         StopWDT();
-        modeL1 = 4;
-  #ifdef DEBUG
-  Serial.print("Button enabled (leaving 3):\t");
-  Serial.println(button_enabled);
-  #endif
+        mode = 4;
       }
-      /* --------- */
       break;
-    case (4):
-      // Waiting for user to push button to start count down
-      // If it takes more than SHUTDOWN_TIME seconds, go to modeL1 1
-      if (OldModeL1 != 4){
-  #ifdef DEBUG
-  Serial.println("In mode 4");
-  #endif
-        OldModeL1 = 4;
+
+    case (4):                           // Count-down
+      if (last_mode != 4){
+        last_mode = 4;
         shutdown_timer = 0;
         timer_running = true;
         DisplayShow(time_left, false);
         StartWDT();
-        //EnableButton();
-        //button_handled = true;
       }
       if (!WDT_handled) {
-  #ifdef DEBUG
-  Serial.print("\tButton enabled:\t");
-  Serial.println(button_enabled);
-  #endif
         WDT_handled = true;
-        if (!timer_running){  // We are paused
+        if (!timer_running){            // We are paused...
           shutdown_timer++;
           if (shutdown_timer >= (SHUTDOWN_TIME*2)){
             StopWDT();
             StopDisplay();
-            modeL1 = 1;
+            mode = 1;
             break;
           }
           display_blank = !display_blank;
-  #ifdef DEBUG
-  Serial.print("\tDisplay blank:\t");
-  Serial.println(display_blank);
-  #endif
-          if (display_blank){
-            display.setBrightness(DEFAULT_BRIGHTNESS, true);
-          } else {
-            display.setBrightness(DEFAULT_BRIGHTNESS, false);
-          }
-          DisplayShow(time_left, false);
-        } else { // We are counting down...
-  #ifdef DEBUG
-  Serial.print("\ttime_left:\t");
-  Serial.println(time_left);
-  #endif
+          display.setBrightness(DEFAULT_BRIGHTNESS, display_blank);
+          DisplayShow(time_left, false);// Need to update LCD to blink...
+        } else {                        // We are counting down...
           time_left--;
           DisplayShow(time_left, false);
           if (time_left <= 0){          // Time's up, go to alarm
             StopWDT();
-            modeL1 = 5;
+            mode = 5;
             break;
           }
         }
       }
-      if (digitalRead(PIN_BTN_1) == LOW){
-  #ifdef DEBUG
-  Serial.println("\tButton was pushed!");
-  #endif
+      if (digitalRead(PIN_BTN_1) == LOW){                                       // User pressed button
           button_handled = true;
           timer_running = !timer_running;
           if (timer_running){
-            display.setBrightness(DEFAULT_BRIGHTNESS, true);
+            display.setBrightness(DEFAULT_BRIGHTNESS, true);                    // Make sure LCD is on
           }
       }
       break;
-    case (5):                         // Alarm...
-      if (OldModeL1 != 5){
-  #ifdef DEBUG
-  Serial.println("In mode 5");
-  #endif
+
+    case (5):                           // Alarm...
+      if (last_mode != 5){
+        last_mode = 5;
         shutdown_timer = 0;
-        OldModeL1 = 5;
         StartWDT();
         EnableButton();
       }
       if (!WDT_handled){
-        shutdown_timer++;
         WDT_handled = true;
+        shutdown_timer++;
         display_blank = !display_blank;
-        if (display_blank){
-          display.setBrightness(DEFAULT_BRIGHTNESS, true);
-        } else {
-          display.setBrightness(DEFAULT_BRIGHTNESS, false);
-        }
-        display.setSegments(SEG_DONE);
+        display.setBrightness(DEFAULT_BRIGHTNESS, display_blank);
+        display.setSegments(SEG_DONE);  // Update LCD to blink
         Beep(4, 1);
-        if (shutdown_timer >= (SHUTDOWN_TIME * 3)){
-          StopWDT();
-          StopDisplay();
-          modeL1 = 1;
-          break;
-        }
       }
-      if (!button_handled){
+      if ((!button_handled) || (shutdown_timer >= (SHUTDOWN_TIME * 3))){
         StopWDT();
         StopDisplay();
-        modeL1 = 1;
+        mode = 1;
       }
       break;
-    case (20): // Battery low mode
-      if (OldModeL1 != 20){
-  #ifdef DEBUG
-  Serial.println("In mode 20");
-  #endif
-        OldModeL1 = 20;
-        battery_warning_issued = true;
-      }
-      // Here we should blink "BAtt" on display and beeping
-      // When done, if batt_critically_low, then modeL1 = 1 (go to sleep), else modeL1 = 2
-      modeL1 = 2;
-      break;
-    case (50): // Setup mode
-      // User pressed button during boot...
-      if (OldModeL1 != 50){
-  #ifdef DEBUG
-  Serial.println("In mode 50");
-  #endif
-        OldModeL1 = 50;
-        static byte setup_param = param1;
+
+    case (20):                          // Battery low mode
+      if (last_mode != 20){
+        last_mode = 20;
         shutdown_timer = 0;
-        StartWDT(); // Should be with param for 4 sec watchdog
+        StartWDT();
       }
-      if (!WDT_handled) { // Timer triggered
+      if (!WDT_handled){
+        WDT_handled = true;
+        shutdown_timer++;
+        display_blank = !display_blank;
+        display.setBrightness(DEFAULT_BRIGHTNESS, display_blank);
+        display.setSegments(SEG_BATT);
+      }
+      if (shutdown_timer >= SHUTDOWN_TIME){
+        StopWDT();
+        StopDisplay();
+        if (battery_critically_low){
+          mode = 1;                     // Go to sleep...
+        } else {
+          mode = 2;                     // Continue...
+        }
+      }
+      break;
+
+    case (50):                          // Setup mode
+      static byte param_nr;
+      static byte param_val;
+      if (last_mode != 50){
+        last_mode = 50;
+        shutdown_timer = 0;
+        param_nr = 0;
+        param_val = params[param_nr];
+        display.showNumberDecEx((param_nr+1)*1000+param_val, 128, false);
+        StartWDT();
+      }
+      if (!WDT_handled) {
         WDT_handled = true;
         shutdown_timer++;
         if (shutdown_timer >= SETUP_SHUTDOWN_TIME) {
-          StopWDT();
-          StopScale();
-          StopDisplay();
-          shutdown_timer = 0;
-          modeL1 = 1; // Go to sleep
-          break;
+          params[param_nr] = param_val;
+          param_nr++;
+          if (param_nr >= 3){
+            StopWDT();
+            StopDisplay();
+            StoreParams();
+            mode = 1; // Go to sleep
+            break;
+          }
+          param_val = params[param_nr];
+          display.showNumberDecEx((param_nr+1)*1000+param_val, 128, false);
         }
       }
-      // Use a single param, set to param1, 2 and 3 consecutively
-      // Listen for button press to cycle through values
+      if (digitalRead(PIN_BTN_1) == LOW){
+        shutdown_timer = 0;
+        param_val++;
+        if (param_val > paramsMax[param_nr]){
+          param_val = paramsMin[param_nr];
+        }
+        display.showNumberDecEx((param_nr+1)*1000+param_val, 128, false);
+      }
       break;
+
     default:
-      // Some error mode...
       break;
   }
 }
 
 // === Supporting functions ===
-
+/*
+  BatteryOK   Used to determine if we can continue or go to sleep due to low battery
+*/
 bool BatteryOK(){
   //float voltage = measureBattery();
   float voltage = 4.0;
@@ -374,32 +332,29 @@ bool BatteryOK(){
   return false;
 }
 
+
 /*
-  Beep        Plays a number of beeps with a certain duration
-  "times"     The number of beeps
-  "duration"  The duration of each beep in tenth of seconds, i.e. 10 equals 1 second, 1 equals 1/10 of a second etc.
+  Beep          Plays a number of beeps with a certain duration
+    "times"     The number of beeps
+    "duration"  The duration of each beep in tenth of seconds, i.e. 10 equals 1 second, 1 equals 1/10 of a second etc.
 */
 void Beep(byte times, byte duration){ 
-
+  return;
 }
 
+
 /*
-  DisplayShow Shows a number on the LCD screen
-  "nr"        The number to display. Note that this has to be an integer even if it is to be displayed as a float.
-              If "isWeight" is true, then "nr" should be times 10, otherwise in seconds (which will be displayed as minutes and seconds)
-  "isWeight"  If true, the "nr" is displayed as a float with one decimal point, otherwise it will be interpreted as seconds and 
-              converted to minutes and seconds
+  DisplayShow   Shows a number on the LCD screen
+    "nr"        The number to display. Note that this has to be an integer even if it is to be displayed as a float.
+                If "isWeight" is true, then "nr" should be times 10, otherwise in seconds (which will be displayed as minutes and seconds)
+    "isWeight"  If true, the "nr" is displayed as a float with one decimal point, otherwise it will be interpreted as seconds and 
+                converted to minutes and seconds
 */
 void DisplayShow(int nr, bool isWeight){
-  #ifdef DEBUG
-  Serial.print("\tAbout to show nr:\t");
-  Serial.println(nr);
-  #endif
   if ((nr > 999) || (nr < 0)){
     display.setSegments(SEG_ERR);
     return;
   }
-  // Show 47.1
   if (isWeight){
     display.showNumberDecEx(nr, 32, false); // 32 is binary for displaying dot at last position, i.e. one decimal nr
   } else {
@@ -414,56 +369,71 @@ void DisplayShow(int nr, bool isWeight){
   }
 }
 
+
+/*
+
+*/
 unsigned int EggWeightToTime(){
-  return ((egg_weight * param1 / param2)/10) + param3;
-}
-
-void StartDisplay(){
-  display.setBrightness(DEFAULT_BRIGHTNESS, true);
-  //display.showNumberDecEx(int(nr1*100+nr2), (0x80 >> 1), true);
-}
-
-float StopDisplay(){
-  display.clear();
+  return ((egg_weight * params[0] / params[1])/10) + params[2];
 }
 
 
-bool ScaleReading(){
-  #ifdef DEBUG
-  //Serial.println("In ScaleReading");
-  #endif
-  if (scale.is_ready()) {
-    #ifdef DEBUG
-    //Serial.println("\tScale **IS** ready!");
-    #endif
-    egg_weight = scale.get_units(10) * 10;
-    return true;
-  }
-  #ifdef DEBUG
-  //Serial.println("\tScale not ready");
-  #endif
-  return false;
+/*
+
+*/
+void EnableButton(){
+  cli();
+  EIMSK |= _BV(INT0);            // Enable INT0 bit in the EIMSK register, enabling the ISR function at HW interrupt
+  sei();
+  button_handled = true;
+  button_enabled = true;
 }
 
-void StartScale(){
-  // Power up the scale...
-  scale.set_scale(SCALE_CALIBRATION);
-  scale.tare();
+
+/*
+
+*/
+void GetParams(){
+  return;
 }
 
-void StopScale(){
-  // Power down the scale...
-}
 
-byte initTest() {
+/*
+
+*/
+byte InitTest() {
   // Test if there is weight on the scale
   if (digitalRead(PIN_BTN_1) == LOW){ // User holding button during boot
     return 50;                         // Enter setup mode
   }
-  return 1; // Go to modeL1 1...
+  return 1; // Go to mode 1...
 }
 
-void powerDown() {
+
+/*
+  Watchdog timer interrupt routine
+*/
+ISR(WDT_vect) {
+  // Reset the watchdog
+  wdt_reset();
+  WDT_handled = false;
+}
+
+
+/*
+  Hardware interrupt routine
+*/
+ISR(INT0_vect) {
+  EIMSK &= ~_BV(INT0);           // Disable the INT0 bit inte EIMSK register so only one interrupt is invoked
+  button_handled = false;
+  button_enabled = false;
+}
+
+
+/*
+
+*/
+void PowerDown() {
   byte adcsra, mcucr1, mcucr2;
   sleep_enable();
   set_sleep_mode(SLEEP_MODE_PWR_DOWN);
@@ -481,6 +451,93 @@ void powerDown() {
   ADCSRA = adcsra;               // Restore ADCSRA
   //digitalWrite(PIN_LED_1, HIGH);
 }
+
+
+/*
+
+*/
+bool ScaleReading(){
+  if (scale.is_ready()) {
+    egg_weight = scale.get_units(10) * 10;
+    return true;
+  }
+  return false;
+}
+
+
+/*
+
+*/
+void StartDisplay(){
+  display.setBrightness(DEFAULT_BRIGHTNESS, true);
+  //display.showNumberDecEx(int(nr1*100+nr2), (0x80 >> 1), true);
+}
+
+
+/*
+
+*/
+void StartScale(){
+  // Power up the scale...
+  scale.set_scale(SCALE_CALIBRATION);
+  scale.tare();
+}
+
+
+/*
+
+*/
+void StartWDT() {
+  cli();                           // Disable interrupts while changing the registers
+  MCUSR = 0;                       // Reset status register flags
+  WDTCSR |= 0b00011000;            // Set WDCE and WDE to enter config mode, or do "WDTCSR = (1<<WDCE) | (1<<WDE);"
+  WDTCSR =  0b01000000 | 0b000110; // set WDIE (interrupt enabled) and clear WDE (to disable reset), and set delay interval, or do "WDTCSR = (1<<WDIE) | (1<<WDE) | (0<<WDP3) | (1<<WDP2) | (1<<WDP1) | (0<<WDP0);
+  sei();                           // re-enable interrupts
+  //  16 ms:     0b000000
+  //  500 ms:    0b000101
+  //  1 second:  0b000110
+  //  2 seconds: 0b000111
+  //  4 seconds: 0b100000
+  //  8 seconds: 0b100001
+}
+
+
+/*
+
+*/
+float StopDisplay(){
+  display.clear();
+}
+
+
+/*
+
+*/
+void StopScale(){
+  // Power down the scale...
+}
+
+
+/*
+
+*/
+void StopWDT() {
+  wdt_reset();                     // Just precaution...
+  cli();                           // Disable interrupts while changing the registers
+  MCUSR = 0;                       // Reset status register flags
+  WDTCSR |= 0b00011000;            // Set WDCE and WDE to enter config mode
+  WDTCSR =  0b00000000;            // set WDIE (interrupt disabled)
+  sei();                           // re-enable interrupts
+}
+
+
+/*
+
+*/
+void StoreParams(){
+  return;
+}
+
 
 void watchdogSetup() {
   cli();  // disable all interrupts
@@ -502,57 +559,5 @@ void watchdogSetup() {
   sei();
 }
 
-void EnableButton(){
-  cli();
-  EIMSK |= _BV(INT0);            // Enable INT0 bit in the EIMSK register, enabling the ISR function at HW interrupt
-  sei();
-  button_handled = true;
-  button_enabled = true;
-}
 
-void StopWDT() {
-  wdt_reset();                     // Just precaution...
-  cli();                           // Disable interrupts while changing the registers
-  MCUSR = 0;                       // Reset status register flags
-  WDTCSR |= 0b00011000;            // Set WDCE and WDE to enter config mode
-  WDTCSR =  0b00000000;            // set WDIE (interrupt disabled)
-  sei();                           // re-enable interrupts
-}
 
-void StartWDT() {
-  cli();                           // Disable interrupts while changing the registers
-  MCUSR = 0;                       // Reset status register flags
-  WDTCSR |= 0b00011000;            // Set WDCE and WDE to enter config mode, or do "WDTCSR = (1<<WDCE) | (1<<WDE);"
-  WDTCSR =  0b01000000 | 0b000110; // set WDIE (interrupt enabled) and clear WDE (to disable reset), and set delay interval, or do "WDTCSR = (1<<WDIE) | (1<<WDE) | (0<<WDP3) | (1<<WDP2) | (1<<WDP1) | (0<<WDP0);
-  sei();                           // re-enable interrupts
-  //  16 ms:     0b000000
-  //  500 ms:    0b000101
-  //  1 second:  0b000110
-  //  2 seconds: 0b000111
-  //  4 seconds: 0b100000
-  //  8 seconds: 0b100001
-}
-
-void BlinkIt(byte times, unsigned int delayTime, byte pin) {
-  if (times == 0) return;
-  for (byte t = 1; t <= times; t++) {
-    digitalWrite(pin, HIGH);
-    delay(delayTime);
-    digitalWrite(pin, LOW);
-    if (t < times) delay(delayTime);
-  }
-}
-
-// Watchdog timer interrupt routine
-ISR(WDT_vect) {
-  // Reset the watchdog
-  wdt_reset();
-  WDT_handled = false;
-}
-
-// Hardware interrupt routine
-ISR(INT0_vect) {
-  EIMSK &= ~_BV(INT0);           // Disable the INT0 bit inte EIMSK register so only one interrupt is invoked
-  button_handled = false;
-  button_enabled = false;
-}
