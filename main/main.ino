@@ -1,4 +1,5 @@
 #include <avr/sleep.h>
+#include <EEPROM.h>
 #include <avr/wdt.h>
 #include <TM1637Display.h>  // https://github.com/avishorp/TM1637
 #include <HX711.h>          // https://github.com/bogde/HX711
@@ -419,7 +420,14 @@ void EnableButton(){
 
 */
 void GetParams(){
-  return;
+  byte val;
+  for (byte nr == 0; nr < 3; nr++){
+    val = EEPROM.read(nr);
+    if ((val > paramsMax[nr]) || (val < paramsMin[nr])){
+      val = params[nr];
+    }
+    params[nr] = val;
+  }
 }
 
 
@@ -563,7 +571,9 @@ void StopWDT() {
 
 */
 void StoreParams(){
-  return;
+  for (byte nr == 0; nr < 3; nr++){
+    EEPROM.update(nr, params[nr]);
+  }
 }
 
 
