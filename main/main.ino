@@ -103,6 +103,9 @@ void loop() {
       break;
 
     case (1):                           // Sleep mode
+      if (last_mode != 1){
+        last_mode = 1;
+      }
       battery_critically_low = false;
       last_mode = 1;
       PowerDown();                      // Sleeping here...
@@ -258,6 +261,7 @@ void loop() {
         StopWDT();
         StopDisplay();
         mode = 1;
+        delay(500);
       }
       break;
 
@@ -288,6 +292,7 @@ void loop() {
     case (50):                          // Setup mode
       static byte param_nr;
       static byte param_val;
+      static unsigned int deb;
       if (last_mode != 50){
         StartDisplay();
         last_mode = 50;
@@ -297,6 +302,7 @@ void loop() {
         display.showNumberDecEx((param_nr+1)*1000+param_val, 128, false);
         StartWDT();
         EnableButton();
+        deb = millis();
   #ifdef DEBUG
   Serial.println("In 50...");
   Serial.println((param_nr+1)*1000+param_val);
@@ -305,8 +311,9 @@ void loop() {
       if (!WDT_handled) {
         WDT_handled = true;
         shutdown_timer++;
-        EnableButton();
+        //EnableButton();
         if (shutdown_timer >= SETUP_SHUTDOWN_TIME) {
+          shutdown_timer = 0;
           params[param_nr] = param_val;
           param_nr++;
           if (param_nr >= 3){
@@ -334,6 +341,9 @@ void loop() {
   #ifdef DEBUG
   Serial.println((param_nr+1)*1000+param_val);
   #endif
+      }
+      if ((millis()-deb)> 200){
+        EnableButton();
       }
       break;
 
@@ -401,6 +411,9 @@ void DisplayShow(int nr, bool isWeight){
 
 */
 unsigned int EggWeightToTime(){
+#ifdef DEBUG
+  return 20;
+#endif
   return ((egg_weight * params[0] / params[1])/10) + params[2];
 }
 
@@ -421,7 +434,7 @@ void EnableButton(){
 */
 void GetParams(){
   byte val;
-  for (byte nr == 0; nr < 3; nr++){
+  for (byte nr = 0; nr < 3; nr++){
     val = EEPROM.read(nr);
     if ((val > paramsMax[nr]) || (val < paramsMin[nr])){
       val = params[nr];
@@ -571,7 +584,7 @@ void StopWDT() {
 
 */
 void StoreParams(){
-  for (byte nr == 0; nr < 3; nr++){
+  for (byte nr = 0; nr < 3; nr++){
     EEPROM.update(nr, params[nr]);
   }
 }
