@@ -66,7 +66,6 @@ volatile byte mode                    = 0;
 byte          last_mode               = 0;
 volatile bool WDT_handled             = true;
 volatile bool button_handled          = true;
-volatile bool button_enabled          = false;
 byte          shutdown_timer          = 0;
 bool          show_as_weight          = true;
 float         egg_weight              = 0;
@@ -289,12 +288,14 @@ void loop() {
       static byte param_nr;
       static byte param_val;
       if (last_mode != 50){
+        StartDisplay();
         last_mode = 50;
         shutdown_timer = 0;
         param_nr = 0;
         param_val = params[param_nr];
         display.showNumberDecEx((param_nr+1)*1000+param_val, 128, false);
         StartWDT();
+        EnableButton();
   #ifdef DEBUG
   Serial.println("In 50...");
   Serial.println((param_nr+1)*1000+param_val);
@@ -303,6 +304,7 @@ void loop() {
       if (!WDT_handled) {
         WDT_handled = true;
         shutdown_timer++;
+        EnableButton();
         if (shutdown_timer >= SETUP_SHUTDOWN_TIME) {
           params[param_nr] = param_val;
           param_nr++;
@@ -315,15 +317,22 @@ void loop() {
           }
           param_val = params[param_nr];
           display.showNumberDecEx((param_nr+1)*1000+param_val, 128, false);
+  #ifdef DEBUG
+  Serial.println((param_nr+1)*1000+param_val);
+  #endif
         }
       }
-      if (digitalRead(PIN_BTN_1) == LOW){
+      if (!button_handled){
+        button_handled = true;
         shutdown_timer = 0;
         param_val++;
         if (param_val > paramsMax[param_nr]){
           param_val = paramsMin[param_nr];
         }
         display.showNumberDecEx((param_nr+1)*1000+param_val, 128, false);
+  #ifdef DEBUG
+  Serial.println((param_nr+1)*1000+param_val);
+  #endif
       }
       break;
 
@@ -403,7 +412,6 @@ void EnableButton(){
   EIMSK |= _BV(INT0);            // Enable INT0 bit in the EIMSK register, enabling the ISR function at HW interrupt
   sei();
   button_handled = true;
-  button_enabled = true;
 }
 
 
@@ -447,7 +455,6 @@ ISR(WDT_vect) {
 ISR(INT0_vect) {
   EIMSK &= ~_BV(INT0);           // Disable the INT0 bit inte EIMSK register so only one interrupt is invoked
   button_handled = false;
-  button_enabled = false;
 }
 
 
