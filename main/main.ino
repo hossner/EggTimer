@@ -81,17 +81,20 @@ bool          battery_critically_low  = false;
 
 void setup() {
   #ifdef DEBUG
+  //while(!Serial.available() ){}
   Serial.begin(9600);
   #endif
   StopWDT();
   pinMode(PIN_BTN_1, INPUT_PULLUP);
   pinMode(PIN_LED_1, OUTPUT);
   scale.begin(PIN_HX71_DT, PIN_HX71_SCK);
+  display.clear();
 }
 
 // === State handling loop ===
 
 void loop() {
+
   switch (mode) {
 
     case 0:                             // Boot mode, initializing & test
@@ -172,17 +175,21 @@ void loop() {
           mode = 1;
           break;
         }
-        show_as_weight = !show_as_weight;
         if (show_as_weight){
           DisplayShow(egg_weight, true);
         } else {
           DisplayShow(time_left, false);
         }
+        show_as_weight = !show_as_weight;
       }
       if (!button_handled){             // User pushed button to start count-down
         button_handled = true;
+        shutdown_timer = 0;
         StopWDT();
         mode = 4;
+  #ifdef DEBUG
+  Serial.println("Button pressed (3)...");
+  #endif
       }
       break;
 
@@ -193,8 +200,10 @@ void loop() {
         timer_running = true;
         DisplayShow(time_left, false);
         StartWDT();
+        button_handled = true;
       }
       if (!WDT_handled) {
+        EnableButton();
         WDT_handled = true;
         if (!timer_running){            // We are paused...
           shutdown_timer++;
@@ -217,7 +226,11 @@ void loop() {
           }
         }
       }
-      if (digitalRead(PIN_BTN_1) == LOW){                                       // User pressed button
+      //if (digitalRead(PIN_BTN_1) == LOW){                                       // User pressed button
+      if (!button_handled){
+  #ifdef DEBUG
+  Serial.println("Button pressed...");
+  #endif
           button_handled = true;
           timer_running = !timer_running;
           if (timer_running){
@@ -282,6 +295,10 @@ void loop() {
         param_val = params[param_nr];
         display.showNumberDecEx((param_nr+1)*1000+param_val, 128, false);
         StartWDT();
+  #ifdef DEBUG
+  Serial.println("In 50...");
+  Serial.println((param_nr+1)*1000+param_val);
+  #endif
       }
       if (!WDT_handled) {
         WDT_handled = true;
@@ -402,6 +419,10 @@ void GetParams(){
 
 */
 byte InitTest() {
+  #ifdef DEBUG
+  Serial.print("Button is:\t");
+  Serial.println(digitalRead(PIN_BTN_1));
+  #endif
   // Test if there is weight on the scale
   if (digitalRead(PIN_BTN_1) == LOW){ // User holding button during boot
     return 50;                         // Enter setup mode
@@ -558,6 +579,3 @@ void watchdogSetup() {
   WDTCSR = (1 << WDIE) | (0 << WDP3) | (1 << WDP2) | (1 << WDP1) | (0 << WDP0);
   sei();
 }
-
-
-
