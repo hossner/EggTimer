@@ -354,7 +354,8 @@ void loop() {
 
 // === Supporting functions ===
 /*
-  BatteryOK   Used to determine if we can continue or go to sleep due to low battery
+  BatteryOK   Used to determine if we can continue or go to sleep due to low battery. Variable "battery_critically_low"
+              is set if the battery is too low.
 */
 bool BatteryOK(){
   //float voltage = measureBattery();
