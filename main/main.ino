@@ -16,10 +16,12 @@
 #define BATTERY_LOW         3.8         // Voltage below which battery is considered low but scale still functions
 #define BATTERY_CRITICAL    3.7         // Voltage below which battery is considered critically low and the scale won't function
 #define SCALE_CALIBRATION   5850        // The calibration value of the scale - needs to be calibrated!
+#define PIEZO_FREQ          1000        // The frequency of the piezo buzzer
 
 // === PINs ===
 #define PIN_BTN_1        2       // The INT0 pin used for HW interrupt, PIN 4 on Atmega328P
 #define PIN_LED_1       13      // PORTB5 (not working ) //13  // Atmega328 PCINT5?
+#define PIN_PIEZO        7
 #define PIN_TM1637_CLK   8  // Yellow wire, PIN 14 on Atmega328P
 #define PIN_TM1637_DIO   9  // Green wire, PIN 15 on Atmega328P
 #define PIN_HX71_SCK     5     // 11 on Atmega329P
@@ -87,6 +89,7 @@ void setup() {
   StopWDT();
   pinMode(PIN_BTN_1, INPUT_PULLUP);
   pinMode(PIN_LED_1, OUTPUT);
+  pinMode(PIN_PIEZO, OUTPUT);
   scale.begin(PIN_HX71_DT, PIN_HX71_SCK);
   display.clear();
 }
@@ -376,8 +379,15 @@ bool BatteryOK(){
     "times"     The number of beeps
     "duration"  The duration of each beep in tenth of seconds, i.e. 10 equals 1 second, 1 equals 1/10 of a second etc.
 */
-void Beep(byte times, byte duration){ 
-  return;
+void Beep(byte times, byte duration){
+  if (times <= 0) return;
+  if ((times * duration) > 1000) return;
+  for (byte i = 0; i < times; i++){
+    tone(PIN_PIEZO, PIEZO_FREQ, duration);
+    if (i < (times - 1)){
+      delay(duration);
+    }
+  }
 }
 
 
