@@ -7,18 +7,20 @@
 #define DEBUG 1
 
 // === Values ===
-#define SHUTDOWN_TIME       10          // Nr of seconds, after which it should automatically turn off
+#define SHUTDOWN_TIME       15          // Nr of seconds, after which it should automatically turn off
 #define SETUP_SHUTDOWN_TIME  5          // Nr of seconds during setup after which it should move between params
 #define MIN_EGG_WEIGHT      200         // The minimum weight to be recognized as an egg
 #define MAX_EGG_WEIGHT      900         // The maximum weight to be recognized as an egg
 #define DEFAULT_BRIGHTNESS  0x0f        // Brightness of LCD screen
 #define SCALE_SENSITIVITY   10.0        // The nr of grams (times 10) the scale has to "stand still" before considered done
-#define BATTERY_LOW         3.8         // Voltage below which battery is considered low but scale still functions
-#define BATTERY_CRITICAL    3.7         // Voltage below which battery is considered critically low and the scale won't function
+#define BATTERY_LOW         3.4         // Voltage below which battery is considered low but scale still functions
+#define BATTERY_CRITICAL    3.2         // Voltage below which battery is considered critically low and the scale won't function
 #define SCALE_CALIBRATION   5850        // The calibration value of the scale - needs to be calibrated!
-#define PIEZO_FREQ          1000        // The frequency of the piezo buzzer
+#define PIEZO_FREQ          2250        // The frequency of the piezo buzzer
+#define PIEZO_DEF_DELAY     80          // Default delay and duration of tone
 
 // === PINs ===
+#define PIN_VOLTMETER   A2              // The PIN used to measure battery voltage
 #define PIN_BTN_1        2       // The INT0 pin used for HW interrupt, PIN 4 on Atmega328P
 #define PIN_LED_1       13      // PORTB5 (not working ) //13  // Atmega328 PCINT5?
 #define PIN_PIEZO        7
@@ -83,7 +85,6 @@ bool          battery_critically_low  = false;
 
 void setup() {
   #ifdef DEBUG
-  //while(!Serial.available() ){}
   Serial.begin(9600);
   #endif
   StopWDT();
@@ -113,9 +114,12 @@ void loop() {
       last_mode = 1;
       PowerDown();                      // Sleeping here...
       button_handled = true;
+      StartDisplay();
+      display.setSegments(SEG_WAIT);
       if (BatteryOK()){             // Either sleep or continue
         mode = 2;
       } else {
+        delay(100);
         mode = 20;
       }
       break;
@@ -128,8 +132,8 @@ void loop() {
         StartScale();
         StartWDT();
         StartDisplay();
-        display.setSegments(SEG_EGG);
-        Beep(1, 1);
+        display.setSegments(SEG_EGG);        
+        Beep(1, PIEZO_DEF_DELAY);
       }
       if (!WDT_handled) {
         WDT_handled = true;
@@ -155,7 +159,7 @@ void loop() {
         } else {
           StopWDT();
           StopScale();
-          Beep(2, 1);
+          Beep(2, PIEZO_DEF_DELAY);
           mode = 3;
           break;
         }
@@ -258,7 +262,7 @@ void loop() {
         display_blank = !display_blank;
         display.setBrightness(DEFAULT_BRIGHTNESS, display_blank);
         display.setSegments(SEG_DONE);  // Update LCD to blink
-        Beep(4, 1);
+        Beep(4, PIEZO_DEF_DELAY);
       }
       if ((!button_handled) || (shutdown_timer >= (SHUTDOWN_TIME * 3))){
         StopWDT();
@@ -272,6 +276,7 @@ void loop() {
       if (last_mode != 20){
         last_mode = 20;
         shutdown_timer = 0;
+        Beep(3, PIEZO_DEF_DELAY/2);
         StartWDT();
       }
       if (!WDT_handled){
@@ -281,7 +286,7 @@ void loop() {
         display.setBrightness(DEFAULT_BRIGHTNESS, display_blank);
         display.setSegments(SEG_BATT);
       }
-      if (shutdown_timer >= SHUTDOWN_TIME){
+      if (shutdown_timer >= SETUP_SHUTDOWN_TIME){
         StopWDT();
         StopDisplay();
         if (battery_critically_low){
@@ -361,12 +366,18 @@ void loop() {
               is set if the battery is too low.
 */
 bool BatteryOK(){
-  //float voltage = measureBattery();
-  float voltage = 4.0;
-  if (voltage > BATTERY_LOW){
+  //float voltage = 3.39;
+  return false;
+  float voltage = 0.0;
+  for (byte v = 0; v < 20; v++) {
+    voltage += analogRead(PIN_VOLTMETER);
+    delay(10);
+  }
+  voltage = (voltage/20.0 * 5.015) / 1024.0;
+  if (voltage > BATTERY_LOW){ // 3.5V
     return true;
   }
-  if (voltage > BATTERY_CRITICAL){
+  if (voltage > BATTERY_CRITICAL){ // 3.4V
     return false;
   }
   battery_critically_low = true;
@@ -383,10 +394,20 @@ void Beep(byte times, byte duration){
   if (times <= 0) return;
   if ((times * duration) > 1000) return;
   for (byte i = 0; i < times; i++){
-    tone(PIN_PIEZO, PIEZO_FREQ, duration);
+    //tone(PIN_PIEZO, PIEZO_FREQ, duration);
+    tone(PIN_PIEZO, PIEZO_FREQ);
+    delay(duration);
+    noTone(PIN_PIEZO);
     if (i < (times - 1)){
       delay(duration);
     }
+/*
+    if (i < (times - 1)){
+      delay(duration);
+      noTone(PIN_PIEZO);
+    }
+    noTone(PIN_PIEZO);
+*/
   }
 }
 
